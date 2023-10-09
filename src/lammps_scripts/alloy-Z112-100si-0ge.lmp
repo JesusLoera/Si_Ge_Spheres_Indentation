@@ -1,0 +1,81 @@
+#1 general
+units		    metal
+dimension	    3
+atom_style      atomic
+neighbor        0.3 bin
+#neigh_modify    delay 10
+ 
+#2 structure
+boundary	    s s s 
+atom_modify     map array sort 0 0.0
+read_data       "/home/mejia/Documents/Servicio_Social_2022_2023/hnp_si_ge/sistemas/si-ge-dots/alloys/10nm/100/100si-0ge/alloy.lmp"
+
+mass            1 28.0855
+group 		    Si type 1
+
+
+# Substrate region
+region 1 block  0.0 200.0 0.0 200.0 0.0 6.0
+group substrate region 1
+fix freeze substrate setforce 0.0 0.0 0.0
+
+# Sphere region
+group  sphere subtract all substrate
+
+#3 force fields
+pair_style  tersoff
+pair_coeff  * * "/home/mejia/Documents/Servicio_Social_2022_2023/hnp_si_ge/forcefield/1989_SiGe.tersoff" Si
+
+compute  arrs sphere pe/atom # potential energy per atom
+variable sstep equal step
+variable pote equal pe
+
+
+#4 Minimization of energy
+dump          1 all custom 1 "dump.relax" id element x y z
+dump_modify   1 element Si
+minimize      1.0e-9 1.0e-9  100000 1000000
+undump        1
+
+# 5 Dynamics in NVT ensemble
+velocity      all create 300.0 4725289 rot yes mom yes dist gaussian
+dump          2 all custom 1000 "dump.nvt" id element x y z
+dump_modify   2 element Si
+fix 		  2 sphere nvt temp 300.0 300.0 0.1  
+variable      diam equal bound(sphere,zmax)-bound(sphere,zmin)
+thermo        1000
+timestep      0.001
+thermo_style  custom step temp pe ke press v_diam
+fix           3 sphere print 500 "${sstep} ${pote} ${diam}" file "termo_nvt.dat"
+run           100000
+undump        2
+unfix         3
+
+
+# Configuraciones iniciales 
+reset_timestep 0                  # Reiniciamos el paso inicial a 0
+variable initdiam equal ${diam}   # longitud antes de la compresion
+variable diam delete
+variable zindentup equal 109.0      # posicion inicial del identador de arriba
+
+# Variables dinámicas 
+variable sstep equal step
+variable xeta equal "(v_zindentup-dt*0.1*elaplong)"          # posicion del identador en casa paso
+# velocidad = 0.1 A/ps
+
+#6 Tensor de Von Mises
+# Radio Van der Walls: Si=2.10, Ge=2.11
+# Volumen V=(2R)^3 : Si=74.088, Ge=75.151
+# Volumen medio = 74.620
+compute     toss all stress/atom NULL
+variable    VM atom "((0.0001)/(1.41421*74.620))*((c_toss[1]-c_toss[2])^2+(c_toss[2]-c_toss[3])^2+(c_toss[3]-c_toss[1])^2+6*((c_toss[4])^2+(c_toss[5])^2+(c_toss[6])^2))^(1/2)"
+
+#6 Indentación
+fix	         4 sphere indent 10 plane z v_xeta hi units box
+variable	 force equal "(f_4[3]*1.602889105)"
+dump         3 all custom 4000 "dump.indent" id element x y z fz v_VM
+dump_modify  3 element Si
+fix 	     5 sphere print 4000 "${sstep}   ${initdiam}  ${xeta}   ${force}  ${pote} " file "indent.dat" screen no
+thermo       1000
+thermo_style custom step temp pe ke  v_xeta v_force press 
+run  	     830000
